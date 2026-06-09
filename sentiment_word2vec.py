@@ -11,8 +11,9 @@ from sklearn.metrics import classification_report, accuracy_score, confusion_mat
 import joblib
 
 # ---------------------------------------------------------------------------
-# 1. DOWNLOAD NLTK RESOURCES (run once)
+# 1. DOWNLOAD NLTK RESOURCES
 # ---------------------------------------------------------------------------
+# Run once per environment — downloads tokeniser and stopword data.
 nltk.download('punkt', quiet=True)
 nltk.download('punkt_tab', quiet=True)
 nltk.download('stopwords', quiet=True)
@@ -20,10 +21,12 @@ nltk.download('stopwords', quiet=True)
 # ---------------------------------------------------------------------------
 # 2. GLOBAL CONFIG
 # ---------------------------------------------------------------------------
+
+# Standard English stopwords from NLTK.
 STOPWORDS = set(stopwords.words('english'))
 
 # Words that flip the sentiment of subsequent tokens.
-# When one of these is encountered, the next tokens get a "neg_" prefix
+# When one of these is encountered the next tokens get a "neg_" prefix
 # until a sentence boundary (. ! ? ; :) or a contrastive conjunction resets it.
 NEGATION_WORDS = {
     'not', 'no', 'never', 'nor', 'neither', 'nowhere',
@@ -55,6 +58,8 @@ LR_SPLIT_SEED = 42
 # ---------------------------------------------------------------------------
 # 3. TEXT CLEANING
 # ---------------------------------------------------------------------------
+
+# Strip HTML, URLs, non-alpha characters, and normalise whitespace + casing.
 def clean_text(text):
     """Normalise raw review text before tokenization.
 
@@ -65,15 +70,17 @@ def clean_text(text):
         4. Collapse multiple whitespace characters into one
         5. Trim and lowercase
     """
-    text = re.sub(r'<[^>]+>', ' ', text)          # strip HTML tags
-    text = re.sub(r'http\S+|www\S+', ' ', text)   # strip URLs
-    text = re.sub(r'[^a-zA-Z\s.!?;:]', ' ', text) # keep only alpha + boundary punctuation
+    text = re.sub(r'<[^>]+>', ' ', text)
+    text = re.sub(r'http\S+|www\S+', ' ', text)
+    text = re.sub(r'[^a-zA-Z\s.!?;:]', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip().lower()
     return text
 
 # ---------------------------------------------------------------------------
-# 4. TOKENISATION WITH NEGATION HANDLING
+# 4. TOKENISATION
 # ---------------------------------------------------------------------------
+
+# Split a cleaned review into individual word tokens using NLTK.
 def tokenize(text):
     """Tokenise a single cleaned review into raw NLTK tokens.
 
@@ -82,6 +89,7 @@ def tokenize(text):
     return word_tokenize(text)
 
 
+# Walk through tokens, detect negation scope, and prepend "neg_" where needed.
 def apply_negation_scope(tokens):
     """Walk through raw tokens and apply negation-scope logic.
 
@@ -99,21 +107,27 @@ def apply_negation_scope(tokens):
     negate = False
 
     for word in tokens:
+        # Sentence boundaries reset negation scope.
         if word in '.!?;:':
             negate = False
             continue
 
+        # Contrastive conjunctions also reset negation
+        # (e.g. "not good but great" → "but" resets, so "great" is not negated).
         if word in CONTRASTIVE_CONJUNCTIONS:
             negate = False
             continue
 
+        # If we are inside a negation span, prefix the word.
         if negate:
             word = 'neg_' + word
 
+        # Negation words themselves activate the scope and are dropped.
         if word in NEGATION_WORDS:
             negate = True
             continue
 
+        # Remove stopwords and very short tokens.
         if word in STOPWORDS or len(word) <= 2:
             continue
 
@@ -124,6 +138,8 @@ def apply_negation_scope(tokens):
 # ---------------------------------------------------------------------------
 # 5. DATA LOADING
 # ---------------------------------------------------------------------------
+
+# Read the CSV and create a binary label column for classification.
 def load_data(filepath):
     """Load CSV and add a binary sentiment column (1 = positive, 0 = negative)."""
     df = pd.read_csv(filepath)
@@ -133,8 +149,21 @@ def load_data(filepath):
     return df
 
 # ---------------------------------------------------------------------------
-# 6. PREPROCESSING PIPELINE (clean → dedup → tokenise)
+# 6. PREPROCESSING PIPELINE
 # ---------------------------------------------------------------------------
+
+# Remove exact duplicate reviews after text normalisation.
+def remove_duplicates(df, subset_col='cleaned'):
+    """Remove duplicate rows based on a given column and print a summary."""
+    before = df.shape[0]
+    df = df.drop_duplicates(subset=[subset_col]).reset_index(drop=True)
+    after = df.shape[0]
+    if before != after:
+        print(f"Dropped {before - after} duplicate(s) after cleaning ({before} -> {after})")
+    return df
+
+
+# Clean, deduplicate, and tokenise the full dataset.
 def preprocess(df):
     """Apply cleaning, deduplication, and tokenisation to the DataFrame.
 
@@ -144,13 +173,7 @@ def preprocess(df):
     """
     print("Cleaning text...")
     df['cleaned'] = df['review'].apply(clean_text)
-
-    # Deduplicate on normalised (cleaned) text.
-    before = df.shape[0]
-    df = df.drop_duplicates(subset=['cleaned']).reset_index(drop=True)
-    after = df.shape[0]
-    if before != after:
-        print(f"Dropped {before - after} duplicate(s) after cleaning ({before} -> {after})")
+    df = remove_duplicates(df)
 
     print("Tokenizing text...")
     df['raw_tokens'] = df['cleaned'].apply(tokenize)
@@ -163,6 +186,8 @@ def preprocess(df):
 # ---------------------------------------------------------------------------
 # 7. WORD2VEC TRAINING
 # ---------------------------------------------------------------------------
+
+# Train a Word2Vec skip-gram model on the tokenised reviews.
 def train_word2vec(sentences):
     """Train a Word2Vec skip-gram model on the tokenised reviews.
 
@@ -186,8 +211,10 @@ def train_word2vec(sentences):
     return model.wv
 
 # ---------------------------------------------------------------------------
-# 8. REVIEW VECTORISATION (mean pooling of word vectors)
+# 8. REVIEW VECTORISATION
 # ---------------------------------------------------------------------------
+
+# Convert each review into a single vector via mean-pooling of word vectors.
 def vectorize_reviews(tokens_list, w2v):
     """Convert each review (list of tokens) into a single 300-D vector.
 
@@ -207,6 +234,8 @@ def vectorize_reviews(tokens_list, w2v):
 # ---------------------------------------------------------------------------
 # 9. TRAIN / TEST SPLIT
 # ---------------------------------------------------------------------------
+
+# Stratified 80/20 split to preserve class proportions.
 def split_data(X, y):
     """Stratified 80/20 train/test split."""
     return train_test_split(
@@ -219,6 +248,8 @@ def split_data(X, y):
 # ---------------------------------------------------------------------------
 # 10. CLASSIFIER TRAINING
 # ---------------------------------------------------------------------------
+
+# Train a Logistic Regression classifier on the vectorised reviews.
 def train_model(X_train, y_train):
     """Train a Logistic Regression classifier on the vectorised reviews."""
     print("Training Logistic Regression classifier...")
@@ -229,6 +260,8 @@ def train_model(X_train, y_train):
 # ---------------------------------------------------------------------------
 # 11. EVALUATION
 # ---------------------------------------------------------------------------
+
+# Print accuracy, classification report, and confusion matrix.
 def evaluate_model(model, X_test, y_test):
     """Print accuracy, classification report, and confusion matrix."""
     y_pred = model.predict(X_test)
@@ -242,6 +275,8 @@ def evaluate_model(model, X_test, y_test):
 # ---------------------------------------------------------------------------
 # 12. SAVE MODELS TO DISK
 # ---------------------------------------------------------------------------
+
+# Persist the classifier and word vectors via joblib.
 def save_models(model, w2v, model_path='sentiment_model.pkl', w2v_path='w2v_model.pkl'):
     """Persist the trained classifier and word vectors to disk via joblib."""
     joblib.dump(model, model_path)
@@ -251,6 +286,8 @@ def save_models(model, w2v, model_path='sentiment_model.pkl', w2v_path='w2v_mode
 # ---------------------------------------------------------------------------
 # 13. MAIN PIPELINE
 # ---------------------------------------------------------------------------
+
+# Orchestrate the full workflow end-to-end.
 def main():
     """Orchestrate the full workflow:
 
@@ -267,20 +304,14 @@ def main():
     df = preprocess(df)
 
     print(f"\nPreprocessing done. {len(df)} reviews ready.")
-    print(df['tokens'])
+    #print(df['tokens'])
 
-    # ---------------------------------------------------------------
     # Train Word2Vec embeddings on our tokenised reviews.
-    # Word2Vec learns dense, 300-D vectors for each word based on
-    # its surrounding context (skip-gram with window=3).
-    # ---------------------------------------------------------------
     w2v = train_word2vec(df['tokens'])
     print(f"Vocabulary size: {len(w2v)} words\n")
 
-    # ---------------------------------------------------------------
     # Convert each review into a single 300-D vector by averaging
     # the Word2Vec vectors of all its tokens.
-    # ---------------------------------------------------------------
     X = vectorize_reviews(df['tokens'], w2v)
     y = df['sentiment_bin'].values
 
