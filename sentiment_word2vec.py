@@ -376,7 +376,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    #main()
 
     # --- Demo: predict on a few example reviews ---
     print("\n" + "=" * 50)
