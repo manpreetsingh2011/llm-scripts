@@ -118,18 +118,20 @@ def apply_negation_scope(tokens):
             negate = False
             continue
 
-        # If we are inside a negation span, prefix the word.
-        if negate:
-            word = 'neg_' + word
-
         # Negation words themselves activate the scope and are dropped.
+        # Must check on the original word (before neg_ prefix) to match correctly.
         if word in NEGATION_WORDS:
             negate = True
             continue
 
         # Remove stopwords and very short tokens.
+        # Check on the original word so "neg_my" is not mistakenly kept.
         if word in STOPWORDS or len(word) <= 2:
             continue
+
+        # If we are inside a negation span, prefix the word.
+        if negate:
+            word = 'neg_' + word
 
         result.append(word)
 
@@ -303,22 +305,30 @@ def predict_review(text, w2v, model):
     Applies the same preprocessing pipeline used during training
     (clean → tokenise → negation scope → vectorise), then classifies.
 
-    Returns (label, confidence) where label is 'positive' or 'negative'.
+    Returns a dict with keys: label, confidence, cleaned, tokens.
     """
     cleaned = clean_text(text)
     raw_tokens = tokenize(cleaned)
     tokens = apply_negation_scope(raw_tokens)
 
     if not tokens:
-        return 'negative', 0.0
+        return {
+            'label': 'negative',
+            'confidence': 0.0,
+            'cleaned': cleaned,
+            'tokens': tokens,
+        }
 
     vec = vectorize_reviews([tokens], w2v)
     prob = model.predict_proba(vec)[0]
     pred = model.predict(vec)[0]
 
-    label = 'positive' if pred == 1 else 'negative'
-    confidence = prob[pred]
-    return label, confidence
+    return {
+        'label': 'positive' if pred == 1 else 'negative',
+        'confidence': prob[pred],
+        'cleaned': cleaned,
+        'tokens': tokens,
+    }
 
 # ---------------------------------------------------------------------------
 # 14. MAIN PIPELINE
@@ -385,6 +395,8 @@ if __name__ == '__main__':
     ]
 
     for text in examples:
-        label, conf = predict_review(text, w2v, model)
-        print(f"\nReview: {text}")
-        print(f"Sentiment: {label} ({conf:.1%} confidence)")
+        result = predict_review(text, w2v, model)
+        print(f"\nRaw:      {text}")
+        print(f"Cleaned:  {result['cleaned']}")
+        print(f"Tokens:   {result['tokens']}")
+        print(f"Sentiment: {result['label']} ({result['confidence']:.1%} confidence)")
