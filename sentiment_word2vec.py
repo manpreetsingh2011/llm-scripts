@@ -273,7 +273,7 @@ def evaluate_model(model, X_test, y_test):
     print(f"Confusion Matrix:\n{confusion_matrix(y_test, y_pred)}")
 
 # ---------------------------------------------------------------------------
-# 12. SAVE MODELS TO DISK
+# 12. SAVE / LOAD MODELS
 # ---------------------------------------------------------------------------
 
 # Persist the classifier and word vectors via joblib.
@@ -283,8 +283,45 @@ def save_models(model, w2v, model_path='sentiment_model.pkl', w2v_path='w2v_mode
     joblib.dump(w2v, w2v_path)
     print(f"Models saved: {model_path}, {w2v_path}")
 
+
+# Restore previously saved models from disk.
+def load_models(model_path='sentiment_model.pkl', w2v_path='w2v_model.pkl'):
+    """Load a saved classifier and KeyedVectors from disk."""
+    model = joblib.load(model_path)
+    w2v = joblib.load(w2v_path)
+    print(f"Models loaded: {model_path}, {w2v_path}")
+    return model, w2v
+
 # ---------------------------------------------------------------------------
-# 13. MAIN PIPELINE
+# 13. SINGLE-REVIEW PREDICTION
+# ---------------------------------------------------------------------------
+
+# Predict sentiment for a raw review string using trained models.
+def predict_review(text, w2v, model):
+    """Predict sentiment for a single raw review string.
+
+    Applies the same preprocessing pipeline used during training
+    (clean → tokenise → negation scope → vectorise), then classifies.
+
+    Returns (label, confidence) where label is 'positive' or 'negative'.
+    """
+    cleaned = clean_text(text)
+    raw_tokens = tokenize(cleaned)
+    tokens = apply_negation_scope(raw_tokens)
+
+    if not tokens:
+        return 'negative', 0.0
+
+    vec = vectorize_reviews([tokens], w2v)
+    prob = model.predict_proba(vec)[0]
+    pred = model.predict(vec)[0]
+
+    label = 'positive' if pred == 1 else 'negative'
+    confidence = prob[pred]
+    return label, confidence
+
+# ---------------------------------------------------------------------------
+# 14. MAIN PIPELINE
 # ---------------------------------------------------------------------------
 
 # Orchestrate the full workflow end-to-end.
@@ -330,3 +367,24 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+    # --- Demo: predict on a few example reviews ---
+    print("\n" + "=" * 50)
+    print("DEMO: Single-review predictions")
+    print("=" * 50)
+
+    model, w2v = load_models()
+
+    examples = [
+        "This movie was absolutely fantastic! The acting was brilliant.",
+        "Terrible film. Complete waste of time. Worst movie ever.",
+        "It was okay, not great but not terrible either. Decent for one watch.",
+        "i am not going to watch this movie again.",
+        "not my cup of tea.",
+        "acting was decent."
+    ]
+
+    for text in examples:
+        label, conf = predict_review(text, w2v, model)
+        print(f"\nReview: {text}")
+        print(f"Sentiment: {label} ({conf:.1%} confidence)")
